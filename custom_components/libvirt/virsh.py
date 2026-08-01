@@ -7,24 +7,23 @@ import base64
 import shutil
 
 
-__all__ = ["get_vm_info", "get_all_vms", "run_virsh", "get_vm_ip", "get_vm_interfaces", "list_snapshots","get_vm_state","start_vm","shutdown_vm","unpause_vm","update_vm_cpu_load"]
+__all__ = ["get_vm_info", "get_vm_uuid", "get_all_vms", "run_virsh", "get_vm_ip", "get_vm_interfaces", "list_snapshots","get_vm_state","start_vm","shutdown_vm","unpause_vm","update_vm_cpu_load"]
 
 _LOGGER = logging.getLogger(__name__)
-SSH_WRAPPER = "/share/libvirt/ssh-wrapper"
-SSH_WRAPPER_PATH = "/share/libvirt/"
+SSH_WRAPPER = "/tmp/libvirt-ssh-wrapper"
+SSH_WRAPPER_PATH = "/tmp/"
 DEFAULT_SSH_HOST = "root@localhost"
+DEFAULT_SSH_KEY = "/config/ssh_key"
 DEFAULT_URI = "qemu:///system"
-
-def take_screenshot(vm_name, ssh_host, local_path):
+def take_screenshot(vm_name, ssh_host, local_path, ssh_key=DEFAULT_SSH_KEY):
     ensure_ssh_wrapper()
 
     remote_ppm = f"/tmp/{vm_name}.ppm"
     remote_png = f"/tmp/{vm_name}.png"
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-
     # Step 1: Try taking the screenshot
     try:
-        result = run_virsh(["screenshot", vm_name, remote_ppm, "--screen", "0"], ssh_host=ssh_host)
+        result = run_virsh(["screenshot", vm_name, remote_ppm, "--screen", "0"], ssh_host=ssh_host, ssh_key=ssh_key)
         if result is None:
             raise RuntimeError("VM might be offline or screenshot failed.")
     except Exception:
@@ -35,21 +34,19 @@ def take_screenshot(vm_name, ssh_host, local_path):
         except Exception as e:
             _LOGGER.error(f"Error copying fallback image: {e}")
         return False
-
     # Step 2: Convert PPM to PNG
     try:
         convert_cmd = f"convert {remote_ppm} {remote_png}"
-        subprocess.run([SSH_WRAPPER, ssh_host, convert_cmd], check=True)
+        subprocess.run([SSH_WRAPPER, ssh_key, ssh_host, convert_cmd], check=True)
     except subprocess.CalledProcessError as e:
         _LOGGER.error(f"Failed to convert screenshot to PNG: {e.stderr}")
         return False
     except Exception as e:
         _LOGGER.error(f"Unexpected error during conversion: {e}")
         return False
-
     # Step 3: Fetch and decode
     try:
-        cmd = [SSH_WRAPPER, ssh_host, f"base64 {remote_png}"]
+        cmd = [SSH_WRAPPER, ssh_key, ssh_host, f"base64 {remote_png}"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         result.check_returncode()
     except subprocess.CalledProcessError as e:
@@ -58,7 +55,6 @@ def take_screenshot(vm_name, ssh_host, local_path):
     except Exception as e:
         _LOGGER.error(f"Unexpected error: {e}")
         return False
-
     try:
         with open(local_path, "wb") as f:
             f.write(base64.b64decode(result.stdout))
@@ -70,83 +66,85 @@ def take_screenshot(vm_name, ssh_host, local_path):
 
 
 
-def is_vm_running(vm_name, ssh_host=None, uri=None):
-    output = run_virsh(["dominfo", vm_name], ssh_host=ssh_host, uri=uri)
+def is_vm_running(vm_name, ssh_host=None, uri=None, ssh_key=DEFAULT_SSH_KEY):
+    output = run_virsh(["dominfo", vm_name], ssh_host=ssh_host, uri=uri, ssh_key=ssh_key)
     for line in output.splitlines():
         if line.startswith("State:"):
             return "running" in line.lower()
     return False
-
-def get_vm_state(vm_name, ssh_host, uri):
-    output = run_virsh(["domstate", vm_name], ssh_host, uri)
+def get_vm_state(vm_name, ssh_host, uri, ssh_key=DEFAULT_SSH_KEY):
+    output = run_virsh(["domstate", vm_name], ssh_host, uri, ssh_key)
     return output.strip()
 
-def start_vm(vm_name, ssh_host, uri):
-    run_virsh(["start", vm_name], ssh_host, uri)
+def start_vm(vm_name, ssh_host, uri, ssh_key=DEFAULT_SSH_KEY):
+    run_virsh(["start", vm_name], ssh_host, uri, ssh_key)
 
-def shutdown_vm(vm_name, ssh_host, uri):
-    run_virsh(["shutdown", vm_name], ssh_host, uri)
+def shutdown_vm(vm_name, ssh_host, uri, ssh_key=DEFAULT_SSH_KEY):
+    run_virsh(["shutdown", vm_name], ssh_host, uri, ssh_key)
 
-def unpause_vm(vm_name, ssh_host, uri):
-    run_virsh(["resume", vm_name], ssh_host, uri)
+def unpause_vm(vm_name, ssh_host, uri, ssh_key=DEFAULT_SSH_KEY):
+    run_virsh(["resume", vm_name], ssh_host, uri, ssh_key)
 
 
 def normalize_key(key):
     return key.lower().replace(" ", "_")
-
 def ensure_ssh_wrapper():
     os.makedirs(os.path.dirname(SSH_WRAPPER_PATH), exist_ok=True)
     if not os.path.exists(SSH_WRAPPER):
         with open(SSH_WRAPPER, "w") as f:
             f.write("""#!/bin/bash
 # SSH wrapper that handles optional port with IPv6 support
-host="$1"
-shift
-
+ssh_key="$1"
+host="$2"
+shift 2
 # Function to parse host and port
 parse_host_port() {
     local input="$1"
-    
+
     # IPv6 with brackets and port: user@[2001:db8::1]:2222
-    if [[ "$input" =~ ^([^@]+@\[.*\]):([0-9]+)$ ]]; then
+    if [[ "$input" =~ ^([^@]+@\\[.*\\]):([0-9]+)$ ]]; then
         echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
         return 0
     fi
-    
+
     # IPv4/hostname with port: user@host:2222 or root@192.168.1.100:2222
     # But NOT IPv6 without brackets: 2001:db8::1 (would be misinterpreted)
-    if [[ "$input" =~ ^([^:]+:[^:]+@[^:]+):([0-9]+)$ ]] || \
-       [[ "$input" =~ ^([^@]+@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)$ ]]; then
+    if [[ "$input" =~ ^([^:]+:[^:]+@[^:]+):([0-9]+)$ ]] || \\
+       [[ "$input" =~ ^([^@]+@[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+):([0-9]+)$ ]]; then
         echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
         return 0
     fi
-    
+
     # No port specified
     echo "$input"
     return 0
 }
-
 # Parse host and port
 result=$(parse_host_port "$host")
 read -r hostname port <<< "$result"
 
 if [ -n "$port" ]; then
-    exec /usr/bin/ssh -o StrictHostKeyChecking=accept-new -i /share/libvirt/ssh_key -p "$port" "$hostname" "$@"
+    exec /usr/bin/ssh -o StrictHostKeyChecking=accept-new -i "$ssh_key" -p "$port" "$hostname" "$@"
 else
-    exec /usr/bin/ssh -o StrictHostKeyChecking=accept-new -i /share/libvirt/ssh_key "$hostname" "$@"
+    exec /usr/bin/ssh -o StrictHostKeyChecking=accept-new -i "$ssh_key" "$hostname" "$@"
 fi
 """)
         os.chmod(SSH_WRAPPER, 0o755)
 
+def _validate_ssh_key(ssh_key):
+    if not ssh_key:
+        raise ValueError("SSH key path must not be empty")
+    if not os.path.isfile(ssh_key):
+        raise FileNotFoundError(f"SSH key does not exist: {ssh_key}")
 
-def run_virsh(args, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
+def run_virsh(args, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
     ensure_ssh_wrapper()
-    
+    _validate_ssh_key(ssh_key)
+
     try:
         # The ssh_host can now be in format: user@host:port or user@host
         # The wrapper script handles the port extraction
-        cmd = [SSH_WRAPPER, ssh_host, "virsh", "-c", "qemu:///system"] + args  # Note: using uri parameter instead of hardcoded "qemu:///system"
-
+        cmd = [SSH_WRAPPER, ssh_key, ssh_host, "virsh", "-c", "qemu:///system"] + args  # Note: using uri parameter instead of hardcoded "qemu:///system"
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -161,15 +159,11 @@ def run_virsh(args, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
 
     except Exception as e:
         raise
-
-def get_all_vms(ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
-    output = run_virsh(["list", "--all", "--name"], ssh_host, uri)
+def get_all_vms(ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
+    output = run_virsh(["list", "--all", "--name"], ssh_host, uri, ssh_key)
     return [line.strip() for line in output.splitlines() if line.strip()]
-
-
-
-def get_vm_info(name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
-    output = run_virsh(["dominfo", name], ssh_host, uri)
+def get_vm_info(name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
+    output = run_virsh(["dominfo", name], ssh_host, uri, ssh_key)
     data = {}
     for line in output.splitlines():
         if ":" in line:
@@ -177,10 +171,16 @@ def get_vm_info(name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
             data[normalize_key(key.strip())] = val.strip()
     return data
 
+def get_vm_uuid(name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
+    info = get_vm_info(name, ssh_host, uri, ssh_key)
+    vm_uuid = info.get("uuid")
+    if not vm_uuid:
+        raise RuntimeError(f"Unable to determine UUID for VM {name}")
+    return vm_uuid.lower()
 
-def get_vm_interfaces(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
+def get_vm_interfaces(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
     try:
-        output = run_virsh(["domifaddr", vm_name, "--source", "agent"], ssh_host, uri)
+        output = run_virsh(["domifaddr", vm_name, "--source", "agent"], ssh_host, uri, ssh_key)
     except subprocess.CalledProcessError as e:
         # Exit code 1 means VM is likely off — this is expected, so ignore it
         if e.returncode == 1:
@@ -191,7 +191,6 @@ def get_vm_interfaces(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
         # VM probably not running or no agent — ignore
         return []
     interfaces = []
-
     if not output:
         return interfaces
 
@@ -203,7 +202,6 @@ def get_vm_interfaces(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
             continue
         if not header_found or not line.strip():
             continue
-
         parts = line.split()
         if len(parts) < 4:
             continue
@@ -216,17 +214,15 @@ def get_vm_interfaces(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
         })
 
     return interfaces
-
-def get_vm_ip(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
-    interfaces = get_vm_interfaces(vm_name, ssh_host, uri)
+def get_vm_ip(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
+    interfaces = get_vm_interfaces(vm_name, ssh_host, uri, ssh_key)
     for iface in interfaces:
         if iface["protocol"] == "ipv4" and not iface["address"].startswith("127."):
             return iface["address"].split("/")[0]
     return None
-
-def list_snapshots(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI):
+def list_snapshots(vm_name, ssh_host=DEFAULT_SSH_HOST, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
     try:
-        output = run_virsh(["snapshot-list", "--domain", vm_name], ssh_host, uri)
+        output = run_virsh(["snapshot-list", "--domain", vm_name], ssh_host, uri, ssh_key)
         lines = output.splitlines()[2:]  # Skip headers
         snapshots = []
         for line in lines:
