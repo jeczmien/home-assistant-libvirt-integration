@@ -13,13 +13,14 @@ async def async_setup(hass, config):
     configured_connections = libvirt_config.get("connections")
 
     if configured_connections is not None:
+        connection_values = configured_connections.values() if isinstance(configured_connections, dict) else configured_connections
         connections = [
             {
                 "ssh_host": connection.get("ssh_host", DEFAULT_SSH_HOST),
                 "ssh_key": ssh_key,
                 "uri": connection.get("uri", DEFAULT_URI),
             }
-            for connection in configured_connections
+            for connection in connection_values
         ]
     else:
         connections = []
