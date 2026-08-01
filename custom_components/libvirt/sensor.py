@@ -2,38 +2,45 @@ import time
 import logging
 from datetime import timedelta
 from homeassistant.helpers.entity import Entity
-from .virsh import get_vm_info, get_vm_uuid, get_vm_ip, get_vm_interfaces, list_snapshots, get_all_vms, normalize_key, DEFAULT_SSH_KEY
+from . import DOMAIN
+from .virsh import get_vm_info, get_vm_ip, get_vm_interfaces, list_snapshots, get_all_vms, normalize_key, DEFAULT_SSH_HOST, DEFAULT_SSH_KEY, DEFAULT_URI
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    uri = config.get("uri", "qemu://system")
-    ssh_host = config.get("ssh_host", "root@localhost")
-    ssh_key = config.get("ssh_key", DEFAULT_SSH_KEY)
     include_interfaces = config.get("include_interfaces", False)
-
-    vms = await hass.async_add_executor_job(get_all_vms, ssh_host, uri, ssh_key)
     sensors = []
-    for vm_name in vms:
-        vm_uuid = await hass.async_add_executor_job(get_vm_uuid, vm_name, ssh_host, uri, ssh_key)
-        sensors.append(LibvirtVMSensor(vm_name, vm_uuid, ssh_host, uri, ssh_key, include_interfaces))
+
+    for connection in hass.data[DOMAIN]["connections"]:
+        ssh_host = connection["ssh_host"]
+        ssh_key = connection["ssh_key"]
+        uri = connection["uri"]
+        vms = await hass.async_add_executor_job(get_all_vms, ssh_host, uri, ssh_key)
+        for vm_name in vms:
+            info = await hass.async_add_executor_job(get_vm_info, vm_name, ssh_host, uri, ssh_key)
+            sensors.append(LibvirtVMSensor(vm_name, ssh_host, uri, include_interfaces, info.get("uuid"), ssh_key))
+
     async_add_entities(sensors, True)
 class LibvirtVMSensor(Entity):
-    def __init__(self, name, vm_uuid, ssh_host, uri, ssh_key, include_interfaces):
+    def __init__(self, name, ssh_host, uri,include_interfaces,uuid,ssh_key):
         self._name = name
         self._state = None
         self._attributes = {}
         self._ssh_host = ssh_host
         self._uri = uri
-        self._ssh_key = ssh_key
         self._include_interfaces = include_interfaces
+        self._uuid = uuid
+        self._ssh_key = ssh_key
         self._last_cpu_time = None
         self._last_timestamp = None
-        self._attr_unique_id = f"{vm_uuid}_state"
 
     @property
     def name(self):
         return f"libvirt_{self._name.lower()}"
+
+    @property
+    def unique_id(self):
+        return self._uuid
 
     @property
     def state(self):
