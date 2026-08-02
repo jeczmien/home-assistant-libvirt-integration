@@ -1,9 +1,10 @@
 import time
 import logging
 from datetime import timedelta
+from homeassistant.core import callback
 from homeassistant.helpers.entity import Entity
-from . import DOMAIN, get_vm_connection
-from .virsh import get_vm_info, get_vm_ip, get_vm_interfaces, list_snapshots, normalize_key, DEFAULT_SSH_HOST, DEFAULT_SSH_KEY, DEFAULT_URI
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from . import DOMAIN, SIGNAL_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -11,11 +12,10 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     include_interfaces = config.get("include_interfaces", False)
     sensors = []
 
-    for (connection_name, vm_name), connection in hass.data[DOMAIN]["vms"].items():
-        info = await hass.async_add_executor_job(get_vm_info, vm_name, connection["ssh_host"], connection["uri"], connection["ssh_key"])
-        sensors.append(LibvirtVMSensor(vm_name, connection_name, include_interfaces, info.get("uuid"), hass))
+    for (connection_name, vm_name), record in hass.data[DOMAIN]["vms"].items():
+        sensors.append(LibvirtVMSensor(vm_name, connection_name, include_interfaces, record["info"].get("uuid"), hass))
 
-    async_add_entities(sensors, True)
+    async_add_entities(sensors)
 class LibvirtVMSensor(Entity):
     def __init__(self, name, connection_name,include_interfaces,uuid,hass):
         self._name = name
@@ -27,6 +27,11 @@ class LibvirtVMSensor(Entity):
         self.hass = hass
         self._last_cpu_time = None
         self._last_timestamp = None
+        self._update_from_cache()
+
+    @property
+    def should_poll(self):
+        return False
 
     @property
     def name(self):
@@ -43,29 +48,36 @@ class LibvirtVMSensor(Entity):
     def extra_state_attributes(self):
         return self._attributes
 
-    def update(self):
-        try:
-            connection = get_vm_connection(self.hass, self._name, self._connection_name)
-            if not connection:
-                raise RuntimeError(f"No SSH host configured for VM: {self._name}")
-            info = get_vm_info(self._name, connection["ssh_host"], connection["uri"], connection["ssh_key"])
-            ip = get_vm_ip(self._name, connection["ssh_host"], connection["uri"], connection["ssh_key"])
-            if (self._include_interfaces):
-               interfaces = get_vm_interfaces(self._name, connection["ssh_host"], connection["uri"], connection["ssh_key"])
-            else:
-               interfaces = []
-            snapshots = list_snapshots(self._name, connection["ssh_host"], connection["uri"], connection["ssh_key"])
-            self._state = info.get("state", "unknown")
-            self._attributes = {
-                **info,
-                "ip": ip,
-                "interfaces": interfaces,
-                "snapshots": snapshots,
-                "ssh_host":  connection["ssh_host"],
-                "uri" : connection["uri"],
-            }
+    async def async_added_to_hass(self):
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_UPDATE,
+                self._handle_update,
+            )
+        )
 
-        except Exception as e:
-            _LOGGER.warning(f"Failed to update VM {self._name}: {e}")
+    @callback
+    def _handle_update(self):
+        self._update_from_cache()
+        self.async_write_ha_state()
+
+    def _update_from_cache(self):
+        record = self.hass.data[DOMAIN]["vms"].get((self._connection_name, self._name))
+        if not record:
             self._state = "unavailable"
-            self._attributes = {"error": str(e)}
+            self._attributes = {"error": f"No cached data for VM: {self._name}"}
+            return
+
+        info = record["info"]
+        interfaces = record["interfaces"] if self._include_interfaces else []
+        connection = record["connection"]
+        self._state = info.get("state", "unknown")
+        self._attributes = {
+            **info,
+            "ip": record["ip"],
+            "interfaces": interfaces,
+            "snapshots": record["snapshots"],
+            "ssh_host":  connection["ssh_host"],
+            "uri" : connection["uri"],
+        }
