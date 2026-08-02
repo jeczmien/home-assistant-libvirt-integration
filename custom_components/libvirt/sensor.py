@@ -75,7 +75,12 @@ class LibvirtVMSensor(Entity):
         self._state = info.get("state", "unknown")
         self._attributes = {
             **info,
-            "ip": record["ip"],
+            "ip": ", ".join(
+                interface["address"].split("/")[0]
+                for interface in record["interfaces"]
+                if interface.get("protocol") == "ipv4"
+                and not interface.get("address", "").startswith("127.")
+            ),
             "interfaces": interfaces,
             "snapshots": record["snapshots"],
             "ssh_host":  connection["ssh_host"],
