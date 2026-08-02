@@ -1,7 +1,7 @@
 import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.entity import Entity
-from . import DOMAIN, get_vm_connection
+from . import DOMAIN, async_get_vm_connection
 from .virsh import get_vm_info, is_vm_running, run_virsh,get_vm_state,unpause_vm,start_vm, DEFAULT_SSH_HOST, DEFAULT_SSH_KEY, DEFAULT_URI
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class LibvirtVMSwitch(SwitchEntity):
     def is_on(self):
         return self._state
     async def async_update(self):
-        connection = get_vm_connection(self.hass, self._name, self._connection_name)
+        connection = await async_get_vm_connection(self.hass, self._name, self._connection_name)
         if not connection:
             self._state = False
             return
@@ -51,18 +51,18 @@ class LibvirtVMSwitch(SwitchEntity):
             is_vm_running, self._name, connection["ssh_host"], connection["uri"], connection["ssh_key"]
         )
     async def async_turn_on(self, **kwargs):
-        connection = get_vm_connection(self.hass, self._name, self._connection_name)
+        connection = await async_get_vm_connection(self.hass, self._name, self._connection_name)
         if not connection:
             return
-        state = get_vm_state(self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
+        state = await self.hass.async_add_executor_job(get_vm_state, self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
         if state == "paused":
-            unpause_vm(self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
+            await self.hass.async_add_executor_job(unpause_vm, self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
         elif state == "shut off":
-            start_vm(self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
+            await self.hass.async_add_executor_job(start_vm, self._name, connection["ssh_host"],connection["uri"],connection["ssh_key"])
         self._state = True
         self.async_write_ha_state()
     async def async_turn_off(self, **kwargs):
-        connection = get_vm_connection(self.hass, self._name, self._connection_name)
+        connection = await async_get_vm_connection(self.hass, self._name, self._connection_name)
         if not connection:
             return
         await self.hass.async_add_executor_job(

@@ -45,6 +45,9 @@ def get_vm_connection(hass, name, connection_name=None):
     _LOGGER.error(f"No SSH host configured for VM: {name}")
     return None
 
+async def async_get_vm_connection(hass, name, connection_name=None):
+    return await hass.async_add_executor_job(get_vm_connection, hass, name, connection_name)
+
 async def async_setup(hass, config):
     os.makedirs("/tmp/libvirt", exist_ok=True)
     await hass.http.async_register_static_paths([
@@ -93,7 +96,13 @@ async def async_setup(hass, config):
     vm_map = {}
     for connection in connections:
         try:
-            output = run_virsh(["list", "--all", "--name"], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            output = await hass.async_add_executor_job(
+                run_virsh,
+                ["list", "--all", "--name"],
+                connection["ssh_host"],
+                connection["uri"],
+                connection["ssh_key"]
+            )
             vm_names = [line.strip() for line in output.splitlines() if line.strip()]
             for vm_name in vm_names:
                 vm_map[(connection["name"], vm_name)] = connection
@@ -107,63 +116,64 @@ async def async_setup(hass, config):
 
     async def handle_vm_screenshot(call):
         name = call.data["name"]
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if not connection:
             return
 
         local_path = f"/tmp/libvirt/{name}.png"
-        success = take_screenshot(
+        success = await hass.async_add_executor_job(
+            take_screenshot,
             name,
             connection["ssh_host"],
             local_path,
-            uri=connection["uri"],
-            ssh_key=connection["ssh_key"],
+            connection["uri"],
+            connection["ssh_key"]
         )
         if not success:
             _LOGGER.error(f"Failed to take screenshot for {name}")
 
     async def handle_start_vm(call):
         name = call.data["name"]
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if connection:
-            run_virsh(["start", name], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            await hass.async_add_executor_job(run_virsh, ["start", name], connection["ssh_host"], connection["uri"], connection["ssh_key"])
 
     async def handle_shutdown_vm(call):
         name = call.data["name"]
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if connection:
-            run_virsh(["shutdown", name], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            await hass.async_add_executor_job(run_virsh, ["shutdown", name], connection["ssh_host"], connection["uri"], connection["ssh_key"])
 
     async def handle_suspend_vm(call):
        name = call.data["name"]
-       connection = get_vm_connection(hass, name, call.data.get("connection"))
+       connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
        if connection:
-           run_virsh(["suspend", name], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+           await hass.async_add_executor_job(run_virsh, ["suspend", name], connection["ssh_host"], connection["uri"], connection["ssh_key"])
     async def handle_resume_vm(call):
        name = call.data["name"]
-       connection = get_vm_connection(hass, name, call.data.get("connection"))
+       connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
        if connection:
-           run_virsh(["resume", name], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+           await hass.async_add_executor_job(run_virsh, ["resume", name], connection["ssh_host"], connection["uri"], connection["ssh_key"])
 
     async def handle_create_snapshot(call):
         name = call.data["name"]
         snapshot = call.data.get("snapshot", f"{name}_snap")
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if connection:
-            run_virsh(["snapshot-create-as", name, snapshot], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            await hass.async_add_executor_job(run_virsh, ["snapshot-create-as", name, snapshot], connection["ssh_host"], connection["uri"], connection["ssh_key"])
     async def handle_revert_snapshot(call):
         name = call.data["name"]
         snapshot = call.data["snapshot"]
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if connection:
-            run_virsh(["snapshot-revert", name, snapshot], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            await hass.async_add_executor_job(run_virsh, ["snapshot-revert", name, snapshot], connection["ssh_host"], connection["uri"], connection["ssh_key"])
 
     async def handle_delete_snapshot(call):
         name = call.data["name"]
         snapshot = call.data["snapshot"]
-        connection = get_vm_connection(hass, name, call.data.get("connection"))
+        connection = await async_get_vm_connection(hass, name, call.data.get("connection"))
         if connection:
-            run_virsh(["snapshot-delete", name, snapshot], ssh_host=connection["ssh_host"], uri=connection["uri"], ssh_key=connection["ssh_key"])
+            await hass.async_add_executor_job(run_virsh, ["snapshot-delete", name, snapshot], connection["ssh_host"], connection["uri"], connection["ssh_key"])
     # Register services
     hass.services.async_register(DOMAIN, "start_vm", handle_start_vm)
     hass.services.async_register(DOMAIN, "shutdown_vm", handle_shutdown_vm)
