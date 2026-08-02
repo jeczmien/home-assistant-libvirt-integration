@@ -4,6 +4,15 @@ set -u
 export LC_ALL=C
 
 cmd="${SSH_ORIGINAL_COMMAND:-}"
+current_screenshot_file=""
+
+cleanup() {
+  if [[ -n "$current_screenshot_file" ]]; then
+    rm -f -- "$current_screenshot_file"
+  fi
+}
+
+trap cleanup EXIT HUP INT TERM
 
 encode() {
   printf '%s' "$1" | base64 | tr -d '\n'
@@ -84,8 +93,9 @@ run_batch() {
 
     if [[ "$include_screenshots" == "1" ]]; then
       if [[ "$state" == "running" ]]; then
-        rm -f "$screenshot_file"
-        if screenshot_error=$(virsh -c "$uri" screenshot "$vm" "$screenshot_file" --screen 0 2>&1); then
+        current_screenshot_file="$screenshot_file"
+        rm -f -- "$screenshot_file"
+        if screenshot_error=$(timeout 15s virsh -c "$uri" screenshot "$vm" "$screenshot_file" --screen 0 2>&1); then
           if [[ -s "$screenshot_file" ]]; then
             screenshot_status="ok"
             screenshot_data=$(base64 "$screenshot_file" | tr -d '\n')
@@ -95,7 +105,8 @@ run_batch() {
         else
           screenshot_status="error:$screenshot_error"
         fi
-        rm -f "$screenshot_file"
+        rm -f -- "$screenshot_file"
+        current_screenshot_file=""
       else
         screenshot_status="offline"
       fi

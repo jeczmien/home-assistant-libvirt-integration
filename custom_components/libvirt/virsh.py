@@ -5,6 +5,7 @@ import re
 import time
 import base64
 import shutil
+import tempfile
 
 
 __all__ = ["get_vm_info", "get_all_vms", "run_virsh", "get_vm_ip", "get_vm_interfaces", "list_snapshots","get_vm_state","start_vm","shutdown_vm","unpause_vm","update_vm_cpu_load", "collect_connection_data", "run_snapshot_action"]
@@ -185,16 +186,53 @@ def _collect_connection_data_batch(connection_name, connection, previous_records
     if vm_name:
         args.append(vm_name)
 
-    output = _run_ssh(connection["ssh_host"], connection["ssh_key"], args, timeout=120)
-    return _parse_batch_output(
-        output,
-        connection_name,
-        connection,
-        previous_records,
-        include_snapshots,
-        include_screenshots,
-        screenshot_directory,
-    )
+    cmd, host = _build_ssh_command(connection["ssh_host"], connection["ssh_key"])
+    cmd.append(host)
+    cmd.extend(args)
+
+    records = {}
+    with tempfile.TemporaryFile(mode="w+t") as stderr_file:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            header = process.stdout.readline().rstrip("\r\n")
+            if header != BATCH_HEADER:
+                raise RuntimeError(f"Remote helper does not support {BATCH_HEADER}")
+
+            for line in process.stdout:
+                line = line.rstrip("\r\n")
+                if not line:
+                    continue
+                records.update(_parse_batch_output(
+                    f"{BATCH_HEADER}\n{line}",
+                    connection_name,
+                    connection,
+                    previous_records,
+                    include_snapshots,
+                    include_screenshots,
+                    screenshot_directory,
+                ))
+
+            returncode = process.wait()
+            stderr_file.seek(0)
+            stderr = stderr_file.read()
+            if returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode,
+                    process.args,
+                    stderr=stderr,
+                )
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    return records
 
 
 def take_screenshot(vm_name, ssh_host, local_path, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY, connection_name="default"):

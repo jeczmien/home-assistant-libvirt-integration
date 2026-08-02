@@ -156,7 +156,7 @@ async def async_setup(hass, config):
         async with connection["lock"]:
             cycle = connection["cycle"] if initial else connection["cycle"] + 1
             include_snapshots = initial or cycle % connection["snapshot_frequency"] == 0
-            include_screenshots = not initial and cycle % connection["screenshot_frequency"] == 0
+            include_screenshots = initial or cycle % connection["screenshot_frequency"] == 0
 
             previous_records = {
                 key: record
