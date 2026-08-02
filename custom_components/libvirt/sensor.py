@@ -8,16 +8,28 @@ from . import DOMAIN, SIGNAL_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
+
+
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     include_interfaces = config.get("include_interfaces", False)
     sensors = []
 
     for (connection_name, vm_name), record in hass.data[DOMAIN]["vms"].items():
-        sensors.append(LibvirtVMSensor(vm_name, connection_name, include_interfaces, record["info"].get("uuid"), hass))
+        sensors.append(
+            LibvirtVMSensor(
+                vm_name,
+                connection_name,
+                include_interfaces,
+                record["info"].get("uuid"),
+                hass,
+            )
+        )
 
     async_add_entities(sensors)
+
+
 class LibvirtVMSensor(Entity):
-    def __init__(self, name, connection_name,include_interfaces,uuid,hass):
+    def __init__(self, name, connection_name, include_interfaces, uuid, hass):
         self._name = name
         self._connection_name = connection_name
         self._state = None
@@ -44,6 +56,7 @@ class LibvirtVMSensor(Entity):
     @property
     def state(self):
         return self._state
+
     @property
     def extra_state_attributes(self):
         return self._attributes
@@ -63,21 +76,39 @@ class LibvirtVMSensor(Entity):
         self.async_write_ha_state()
 
     def _update_from_cache(self):
-        record = self.hass.data[DOMAIN]["vms"].get((self._connection_name, self._name))
+        record = self.hass.data[DOMAIN]["vms"].get(
+            (self._connection_name, self._name)
+        )
         if not record:
             self._state = "unavailable"
-            self._attributes = {"error": f"No cached data for VM: {self._name}"}
+            self._attributes = {
+                "error": f"No cached data for VM: {self._name}"
+            }
             return
 
         info = record["info"]
         interfaces = record["interfaces"] if self._include_interfaces else []
         connection = record["connection"]
+
         self._state = info.get("state", "unknown")
         self._attributes = {
             **info,
             "ip": record["ip"],
+            "ips": [
+                interface["address"].split("/")[_interfaces else []
+        connection = record["connection"]
+
+        self._state = info.get("state", "unknown")
+        self._attributes = {
+            **info,
+            "ip": record["ip"],
+            "ips": [0]
+                for interface in record["interfaces"]
+                if interface.get("protocol") == "ipv4"
+                and not interface.get("address", "").startswith("127.")
+            ],
             "interfaces": interfaces,
             "snapshots": record["snapshots"],
-            "ssh_host":  connection["ssh_host"],
-            "uri" : connection["uri"],
+            "ssh_host": connection["ssh_host"],
+            "uri": connection["uri"],
         }
