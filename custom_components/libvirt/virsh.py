@@ -56,12 +56,11 @@ def _run_ssh(ssh_host, ssh_key, args):
 
 
 def take_screenshot(vm_name, ssh_host, local_path, uri=DEFAULT_URI, ssh_key=DEFAULT_SSH_KEY):
-    remote_ppm = f"/tmp/{vm_name}.ppm"
     remote_png = f"/tmp/{vm_name}.png"
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     # Step 1: Try taking the screenshot
     try:
-        result = run_virsh(["screenshot", vm_name, remote_ppm, "--screen", "0"], ssh_host=ssh_host, uri=uri, ssh_key=ssh_key)
+        result = run_virsh(["screenshot", vm_name, remote_png, "--screen", "0"], ssh_host=ssh_host, uri=uri, ssh_key=ssh_key)
         if result is None:
             raise RuntimeError("VM might be offline or screenshot failed.")
     except Exception:
@@ -72,16 +71,7 @@ def take_screenshot(vm_name, ssh_host, local_path, uri=DEFAULT_URI, ssh_key=DEFA
         except Exception as e:
             _LOGGER.error(f"Error copying fallback image: {e}")
         return False
-    # Step 2: Convert PPM to PNG
-    try:
-        _run_ssh(ssh_host, ssh_key, ["convert", remote_ppm, remote_png])
-    except subprocess.CalledProcessError as e:
-        _LOGGER.error(f"Failed to convert screenshot to PNG: {e.stderr}")
-        return False
-    except Exception as e:
-        _LOGGER.error(f"Unexpected error during conversion: {e}")
-        return False
-    # Step 3: Fetch and decode
+    # Step 2: Fetch and decode
     try:
         output = _run_ssh(ssh_host, ssh_key, ["base64", remote_png])
     except subprocess.CalledProcessError as e:
