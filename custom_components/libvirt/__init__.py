@@ -2,12 +2,18 @@ from .virsh import run_virsh, is_vm_running, DEFAULT_SSH_HOST, DEFAULT_SSH_KEY, 
 import os
 import subprocess
 import logging
+from homeassistant.components.http import StaticPathConfig
 
 
 DOMAIN = "libvirt"
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass, config):
+    os.makedirs("/tmp/libvirt", exist_ok=True)
+    await hass.http.async_register_static_paths([
+        StaticPathConfig("/libvirt", "/tmp/libvirt", False)
+    ])
+
     libvirt_config = config.get(DOMAIN, {}) or {}
     ssh_key = libvirt_config.get("ssh_key", DEFAULT_SSH_KEY)
     configured_connections = libvirt_config.get("connections")
@@ -75,7 +81,7 @@ async def async_setup(hass, config):
         if not connection:
             return
 
-        local_path = f"/config/www/libvirt/{name}.png"
+        local_path = f"/tmp/libvirt/{name}.png"
         success = take_screenshot(
             name,
             connection["ssh_host"],
