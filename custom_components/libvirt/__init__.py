@@ -210,7 +210,7 @@ async def async_setup(hass, config):
             return
 
         connection = record["connection"]
-        local_path = f"/tmp/libvirt/{name}.png"
+        local_path = f"/tmp/libvirt/{connection['name']}_{name}.png"
         success = await hass.async_add_executor_job(
             take_screenshot,
             name,
@@ -218,6 +218,7 @@ async def async_setup(hass, config):
             local_path,
             connection["uri"],
             connection["ssh_key"],
+            connection["name"],
         )
         if not success:
             _LOGGER.error(f"Failed to take screenshot for {name}")
